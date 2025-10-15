@@ -17,7 +17,8 @@ if not os.path.exists(EMBEDDINGS_FILE) or not os.path.exists(INDEX_FILE):
     raise RuntimeError("No hi ha embeddings ni index; genera'ls localment primer.")
 
 # Carregar embeddings i index
-embeddings = np.load(EMBEDDINGS_FILE)
+embeddings = np.load(EMBEDDINGS_FILE, allow_pickle=True)
+
 index = faiss.read_index(INDEX_FILE)
 
 # Inicialitzar Flask
