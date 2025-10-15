@@ -81,7 +81,8 @@ def search(query: str, top_k: int = 3):
 # Handlers de Telegram
 # ------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Hola! Escriu'm una pregunta i cercaré al corpus per tu.")
+    await update.message.reply_text("👋 Benvingut a *miscellanIAbot*!\n\n"
+        "Pregunta sobre temes, pobles o articles de la Ribera d’Ebre.")
 
 #import tiktoken  # pip install tiktoken
 
