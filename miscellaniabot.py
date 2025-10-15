@@ -83,7 +83,7 @@ def search(query: str, top_k: int = 3):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👋 Hola! Escriu'm una pregunta i cercaré al corpus per tu.")
 
-import tiktoken  # pip install tiktoken
+#import tiktoken  # pip install tiktoken
 
 MAX_TELEGRAM_CHARS = 4000
 MAX_MODEL_TOKENS = 3000  # màxim tokens per al prompt + resposta
