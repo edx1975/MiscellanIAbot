@@ -1,1 +1,1 @@
-worker: python miscellaniabot.py
+worker: git lfs pull && python miscellaniabot.py
