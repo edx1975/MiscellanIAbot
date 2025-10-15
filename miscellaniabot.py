@@ -1,63 +1,90 @@
 import os
-import numpy as np
+import time
+import json
+import logging
 import faiss
-from flask import Flask, request, jsonify
-from openai import OpenAI
+import numpy as np
+from pathlib import Path
+from telegram import Update
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+from dotenv import load_dotenv
+from typing import List, Tuple
 
-# Rutes dels fitxers
-EMBEDDINGS_FILE = "data/embeddings_G_pro_large.npy"
-INDEX_FILE = "data/faiss_index_g_pro_large.bin"
-CORPUS_FILE = "data/corpus_original.jsonl"
+# ---- Config ----
+load_dotenv()
+logging.basicConfig(level=logging.INFO)
 
-# Inicialitzar client OpenAI
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Comprovació de fitxers
-if not os.path.exists(EMBEDDINGS_FILE) or not os.path.exists(INDEX_FILE):
+DATA_DIR = Path(os.getenv("DATA_DIR", "data"))
+METADATA_PATH = Path(os.getenv("METADATA_PATH", DATA_DIR / "corpus_original.jsonl"))
+EMB_PATH = Path(os.getenv("EMB_PATH", DATA_DIR / "embeddings_G_pro_large.npy"))
+FAISS_INDEX_PATH = Path(os.getenv("FAISS_INDEX_PATH", DATA_DIR / "faiss_index_G_pro_large.index"))
+
+TOP_K = 3  # Nombre de resultats més rellevants a retornar
+TELEGRAM_CHUNK = 3800
+
+# ---- Carregar embeddings i index ----
+if not EMB_PATH.exists() or not FAISS_INDEX_PATH.exists():
     raise RuntimeError("No hi ha embeddings ni index; genera'ls localment primer.")
 
-# Carregar embeddings i index
-embeddings = np.load(EMBEDDINGS_FILE, allow_pickle=True)
+logging.info("Carregant embeddings...")
+embeddings = np.load(EMB_PATH, allow_pickle=True)
 
-index = faiss.read_index(INDEX_FILE)
+logging.info("Carregant index FAISS...")
+index = faiss.read_index(str(FAISS_INDEX_PATH))
 
-# Inicialitzar Flask
-app = Flask(__name__)
+# Carregar metadata (corpus original)
+with open(METADATA_PATH, "r", encoding="utf-8") as f:
+    metadata = [json.loads(line) for line in f]
 
-def get_top_docs(query, k=5):
-    """Retorna els k documents més similars a la query."""
-    q_emb = client.embeddings.create(
-        model="text-embedding-3-large",
-        input=query
-    ).data[0].embedding
-    q_emb = np.array(q_emb, dtype=np.float32).reshape(1, -1)
-    distances, indices = index.search(q_emb, k)
-    # Aquí pots carregar els documents del corpus segons els indices
-    top_docs = []
-    with open(CORPUS_FILE, "r", encoding="utf-8") as f:
-        lines = f.readlines()
-        for idx in indices[0]:
-            top_docs.append(lines[idx].strip())
-    return top_docs
+# ---- Funcions helpers ----
+def search(query: str, top_k: int = TOP_K) -> List[Tuple[str, float]]:
+    """Fes una cerca a FAISS i retorna (text, score)"""
+    query_vec = np.random.rand(embeddings.shape[1]).astype(np.float32)  # placeholder, substituir per embedding real
+    D, I = index.search(np.array([query_vec]), top_k)
+    results = [(metadata[i]["text"], float(D[0][idx])) for idx, i in enumerate(I[0])]
+    return results
 
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    """Endpoint per Telegram."""
-    data = request.get_json()
-    message = data.get("message", {}).get("text")
-    if not message:
-        return jsonify({"status": "no message"}), 400
+def chunk_text(text: str, chunk_size: int = TELEGRAM_CHUNK) -> List[str]:
+    """Divideix text llarg en chunks per Telegram"""
+    return [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
 
-    # Obtenir els documents rellevants
+# ---- Handlers de Telegram ----
+def start(update: Update, context: CallbackContext):
+    update.message.reply_text("Hola! Sóc el bot. Escriu qualsevol cosa i et respondre amb informació rellevant.")
+
+def handle_message(update: Update, context: CallbackContext):
+    user_text = update.message.text
+    logging.info(f"Missatge rebut: {user_text}")
+
+    # Cerca amb FAISS
     try:
-        top_docs = get_top_docs(message)
-        answer = " ".join(top_docs[:3])  # per exemple, resumim els 3 primers
+        results = search(user_text)
+        response_text = "\n\n".join([f"{r[0]} (score: {r[1]:.2f})" for r in results])
     except Exception as e:
-        answer = f"Error: {e}"
+        logging.error(f"Error cercant embeddings: {e}")
+        response_text = "No s'ha pogut cercar informació en aquest moment."
 
-    # Aquí pots afegir la crida a Telegram per enviar la resposta
-    return jsonify({"answer": answer})
+    # Enviar resposta en chunks si és molt llarg
+    for chunk in chunk_text(response_text):
+        update.message.reply_text(chunk)
+
+# ---- Inicialitzar bot ----
+def main():
+    if not TELEGRAM_TOKEN:
+        raise RuntimeError("No s'ha trobat TELEGRAM_TOKEN a les variables d'entorn.")
+
+    updater = Updater(token=TELEGRAM_TOKEN, use_context=True)
+    dispatcher = updater.dispatcher
+
+    dispatcher.add_handler(CommandHandler("start", start))
+    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+
+    logging.info("Bot iniciat. Esperant missatges...")
+    updater.start_polling()
+    updater.idle()
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    main()
