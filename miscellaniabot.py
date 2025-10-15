@@ -83,6 +83,19 @@ def search(query: str, top_k: int = 3):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👋 Hola! Escriu'm una pregunta i cercaré al corpus per tu.")
 
+import tiktoken  # pip install tiktoken
+
+MAX_TELEGRAM_CHARS = 4000
+MAX_MODEL_TOKENS = 3000  # màxim tokens per al prompt + resposta
+ESTIM_TOKENS_PER_CHAR = 0.25  # aproximació: 1 token ~ 4 caràcters
+
+def truncate_text_for_tokens(text, max_tokens):
+    """Trunca text segons el nombre aproximat de tokens."""
+    max_chars = int(max_tokens / ESTIM_TOKENS_PER_CHAR)
+    if len(text) > max_chars:
+        return text[:max_chars] + "..."
+    return text
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.message.text.strip()
     if not query:
@@ -90,23 +103,46 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        results = search(query)
-        if not results:
-            await update.message.reply_text("No he trobat res rellevant.")
-            return
+        results = search(query, top_k=5)  # més fragments, però després truncarem
 
-        reply_parts = []
+        # Truncar fragments segons el límit total de tokens
+        available_tokens_for_context = MAX_MODEL_TOKENS - 600  # reservem 600 per la resposta
+        tokens_per_fragment = available_tokens_for_context // len(results) if results else 0
+
+        context_texts = []
         for r in results:
-            title = r.get("title", "Sense títol")
-            summary = r.get("summary", r.get("text", ""))[:800]
-            reply_parts.append(f"📄 *{title}*\n{summary}")
+            text = r.get("text", "")
+            truncated = truncate_text_for_tokens(text, tokens_per_fragment)
+            context_texts.append(truncated)
+        context_text = "\n\n".join(context_texts)
 
-        reply = "\n\n".join(reply_parts)
-        await update.message.reply_text(reply[:4000], parse_mode="Markdown")
+        prompt = f"""
+Ets un assistent conversacional sobre la historia, cultura, patrimoni de la Ribera d'ebre (Tarragona) molt amable i clar.
+La persona et fa aquesta pregunta:
+{query}
+
+Tingues en compte aquests fragments d'informació que he trobat:
+{context_text}
+
+Respon de manera natural i conversacional, amb les teves paraules.
+No afegeixis cap format especial ni markdown.
+Si la resposta és llarga, resumeix-la per no passar el límit de Telegram.
+"""
+
+        # Crida al model
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=600
+        )
+
+        answer = response.choices[0].message.content.strip()
+        await update.message.reply_text(answer[:MAX_TELEGRAM_CHARS])
 
     except Exception as e:
-        logger.error(f"Error durant la cerca: {e}")
+        logger.error(f"Error durant la cerca/conversa: {e}")
         await update.message.reply_text("⚠️ Hi ha hagut un error processant la consulta.")
+
 
 # ------------------------
 # Inicialitzar bot
